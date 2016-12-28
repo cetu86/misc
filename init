@@ -1,0 +1,68 @@
+#!/bin/sh
+
+PATH=/bin:/usr/bin:/sbin:/usr/sbin
+UUID="937c1769-fe55-4a85-8add-39f080e64291"
+NEWTYP="btrfs"
+NEWMNT="/mnt/ebs"
+OLDMNT="/mnt/old"
+OPTIONS="ssd"
+SLEEP=1
+
+#mount -t proc proc /proc
+#mount -t sysfs sys /sys
+#mount -o bind /dev dev/
+
+while true ; do
+    echo "waiting for mounting.."
+    sleep $SLEEP
+    echo "Trying to mount $UUID writable."
+    mount -t $NEWTYP -o rw --uuid $UUID $NEWMNT || continue
+    echo "Mounted."
+    break;
+done
+
+[ ! -d $NEWMNT/$OLDMNT ] && echo "Creating directory $NEWMNT/$OLDMNT." && mkdir -p $NEWMNT/$OLDMNT
+
+echo "Remounting $NEWMNT $OPTIONS."
+mount -o remount,$OPTIONS $NEWMNT
+
+echo "Trying to pivot."
+cd $NEWMNT
+pivot_root . ./$OLDMNT
+
+#for dir in /dev /proc /sys; do
+#    echo "Moving mounted file system ${OLDMNT}${dir} to $dir."
+#    mount --move ./${OLDMNT}${dir} ${dir}
+#done
+
+echo "Changing directory to new root"
+cd ~
+
+
+echo "configuring network interface"
+
+# sometimes eth0 isn't ready yet, so retry 
+a=0
+while [ $a -lt 60 ]; do
+	echo "."
+	if /sbin/ip link set dev eth0 up; then
+		break
+	fi
+	sleep 2
+	a=`expr $a + 1`
+done
+
+/sbin/ip addr add 192.168.178.3/255.255.255.0 broadcast 192.168.178.255 dev eth0
+/sbin/ip route add default via 192.168.178.1
+
+echo "setting time"
+# give ntpd 120 seconds to set the time
+timeout 120s ntpd -q -g
+
+# show date to tell that it works
+date
+
+echo "starting systemd"
+
+echo "Tying to chroot and umount $OLDMNT."
+exec /bin/sh -c "umount $OLDMNT/dev; umount $OLDMNT; rmdir $OLDMNT; exec /usr/bin/init"
